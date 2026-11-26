@@ -60,6 +60,7 @@ class FraudAppMLTest(TestCase):
         result = self.service.predict("XGBoost", features)
         self.assertIn("prediction", result)
         self.assertIn("confidence", result)
+        self.assertLess(result["confidence"], 1.0)
         self.assertIn("top_drivers", result)
         self.assertIn("explanation", result)
         for key in ("idea", "guidance", "critique", "evidence"):

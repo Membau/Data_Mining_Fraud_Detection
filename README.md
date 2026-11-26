@@ -46,7 +46,10 @@ Trong lĩnh vực tài chính – ngân hàng, giao dịch gian lận thẻ tín
 ### 3.1. Phương pháp triển khai thu thập, tiền xử lý và chuẩn bị 14 dòng dữ liệu mẫu
 - **Tập huấn luyện khởi tạo (`data/creditcard_prefix.csv`):** `142,403` giao dịch, gồm `269` giao dịch gian lận (`0.189%`).
 - **Tập luồng thích ứng & kiểm thử (`data/creditcard_suffix.csv`):** `142,404` giao dịch, gồm `223` giao dịch gian lận (`0.157%`).
-- **Chuẩn hóa dữ liệu (`sklearn.preprocessing.StandardScaler`):** Chỉ `fit` trên tập `prefix` rồi `transform` cho `suffix` để tránh rò rỉ dữ liệu (Data Leakage).
+- **Chuẩn hóa dữ liệu (`sklearn.preprocessing.StandardScaler`):** Chỉ `fit` trên tập `prefix` rồi `transform` cho `suffix` (và lưu vào `scaler.pkl`) để tránh rò rỉ dữ liệu (Data Leakage).
+- **Tiền xử lý riêng cho XGBoost:**
+  - *Ở tầng Pipeline:* Giữ nguyên phân phối gốc (không dùng SMOTE tránh overfitting), sử dụng tham số $\text{scale\_pos\_weight} = \frac{142{,}134}{269} \approx 528.38$ để tăng trọng số hàm mất mát `logloss` cho lớp gian lận. Dù cây quyết định không bắt buộc chuẩn hóa thang đo, XGBoost vẫn dùng chung đầu vào đã qua `StandardScaler` để đồng bộ công bằng với **HAT** (dùng Naive Bayes ở lá nhạy với thang đo) / **ARF** và tính điểm bất thường $|z\text{-score}| \times \text{importance}$ cho phần giải thích XAI.
+  - *Ở tầng nội tại thuật toán:* Khi gọi `.fit()`, XGBoost tự động rời rạc hóa giá trị liên tục theo phân vị (**Quantile Sketch / Histogram Binning**) và tự học hướng rẽ tối ưu cho giá trị thiếu (**Sparsity-aware Split Finding**).
 - **Trích xuất 14 dòng mẫu đại diện (`fraud_web/ml_models/samples.json`):** Hàm `build_14_representative_samples` trong `ml_engine/train_models.py` chọn **7 giao dịch gian lận** và **7 giao dịch hợp lệ** từ tập `suffix` trải đều theo dải giá trị `Amount` (từ nhỏ đến lớn) và `Time`, phản ánh tính đa dạng của bài toán khi hiển thị trên web.
 
 ### 3.2. Phương pháp đánh giá ảnh hưởng thuộc tính & đọc mô hình đã huấn luyện

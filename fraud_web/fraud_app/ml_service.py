@@ -100,6 +100,8 @@ class FraudPredictionService:
             probability = float(probs.get(1, 0.0))
             prediction = int(pred) if pred is not None else (1 if probability >= 0.5 else 0)
 
+        # Clip probability to [0.0001, 0.9999] so confidence never reports an unrealistic 100.00%
+        probability = float(np.clip(probability, 1e-4, 1.0 - 1e-4))
         confidence = float(max(probability, 1.0 - probability))
         label = "Gian lận (Fraud)" if prediction == 1 else "Hợp lệ (Normal)"
         top_drivers = self._top_transaction_drivers(model_name, feature_names, raw_vec, scaled_vec)
