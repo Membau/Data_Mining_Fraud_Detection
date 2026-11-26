@@ -1,0 +1,10 @@
+/venv
+/_pipeline_output
+/data/*.csv
+__pycache__/
+*.py[cod]
+*.sqlite3
+/data/*.csv
+__pycache__/
+*.py[cod]
+*.sqlite3

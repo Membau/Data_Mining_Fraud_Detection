@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phát hiện Gian lận Giao dịch — XGBoost, HAT & ARF</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex flex-col">
+    <!-- Header & Model Dropdown -->
+    <header class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-lg font-bold tracking-tight">Hệ thống Phát hiện Gian lận Giao dịch</h1>
+                <p class="text-xs text-slate-300" id="datasetSummaryText">Đang tải thông tin dữ liệu...</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <label for="modelSelect" class="text-sm font-medium text-slate-200">Chọn mô hình:</label>
+                <select id="modelSelect" onchange="onModelChange()" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    <option value="XGBoost">XGBoost (Batch Gradient Boosting)</option>
+                    <option value="HAT">HAT (Cây thích ứng Hoeffding)</option>
+                    <option value="ARF">ARF (Adaptive Random Forest)</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 py-6 flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
+        <!-- Left 2 columns: Metrics + 14-row table + Manual input -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Reliability Metrics -->
+            <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                    <h2 class="text-base font-semibold text-slate-800">Độ tin cậy & Đánh giá mô hình</h2>
+                    <span id="trainModeBadge" class="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-medium"></span>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                    <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div class="text-xs text-slate-500 font-medium">Precision</div>
+                        <div id="metricPrecision" class="text-lg font-bold text-blue-600 mt-1">--</div>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div class="text-xs text-slate-500 font-medium">Recall</div>
+                        <div id="metricRecall" class="text-lg font-bold text-blue-600 mt-1">--</div>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div class="text-xs text-slate-500 font-medium">F1-Score</div>
+                        <div id="metricF1" class="text-lg font-bold text-blue-600 mt-1">--</div>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div class="text-xs text-slate-500 font-medium">ROC-AUC</div>
+                        <div id="metricRoc" class="text-lg font-bold text-blue-600 mt-1">--</div>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg border border-slate-100 col-span-2 sm:col-span-1">
+                        <div class="text-xs text-slate-500 font-medium">PR-AUC</div>
+                        <div id="metricPr" class="text-lg font-bold text-emerald-600 mt-1">--</div>
+                    </div>
+                </div>
+                <div id="confusionMatrixRow" class="mt-3 text-xs text-slate-600 flex flex-wrap gap-4"></div>
+            </section>
+
+            <!-- 14 Sample Transactions -->
+            <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-base font-semibold text-slate-800">Bảng 14 giao dịch mẫu đại diện (tập Suffix)</h2>
+                    <span class="text-xs text-slate-500">7 Gian lận / 7 Hợp lệ</span>
+                </div>
+                <div class="overflow-x-auto max-h-80">
+                    <table class="w-full text-left border-collapse text-sm">
+                        <thead>
+                            <tr class="bg-slate-50 text-slate-600 text-xs uppercase border-b">
+                                <th class="p-2.5">#</th>
+                                <th class="p-2.5">Time (s)</th>
+                                <th class="p-2.5">Amount ($)</th>
+                                <th class="p-2.5">V14</th>
+                                <th class="p-2.5">V17</th>
+                                <th class="p-2.5">Nhãn thực tế</th>
+                                <th class="p-2.5 text-center">Kiểm tra</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sampleTableBody" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Quick Manual Input -->
+            <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <h2 class="text-base font-semibold text-slate-800 mb-3">Thử nghiệm nhập nhanh thông số giao dịch</h2>
+                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">Time (giây)</label>
+                        <input type="number" step="any" id="manualTime" value="95000" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">Amount ($)</label>
+                        <input type="number" step="any" id="manualAmount" value="250.0" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">V14</label>
+                        <input type="number" step="any" id="manualV14" value="-6.5" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">V17</label>
+                        <input type="number" step="any" id="manualV17" value="-4.2" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">V12</label>
+                        <input type="number" step="any" id="manualV12" value="-3.1" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">V10</label>
+                        <input type="number" step="any" id="manualV10" value="-2.8" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+                    </div>
+                </div>
+                <button onclick="runManualInference()" class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg text-sm transition">
+                    Dự báo giao dịch bằng mô hình đang chọn
+                </button>
+            </section>
+        </div>
+
+        <!-- Right column: Prediction + Explanation + Feature Importance -->
+        <div class="space-y-6">
+            <!-- Prediction & Explanation -->
+            <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <h2 class="text-base font-semibold text-slate-800 mb-3">Kết quả Dự báo & Giải thích (XAI)</h2>
+                <div id="predictionPlaceholder" class="text-sm text-slate-500 py-4 text-center border border-dashed border-slate-200 rounded-lg">
+                    Chọn một dòng trong bảng 14 giao dịch hoặc nhấn Dự báo để xem kết quả.
+                </div>
+                <div id="predictionResultBox" class="hidden space-y-4">
+                    <div class="p-3.5 rounded-lg border flex justify-between items-center" id="predictionBanner">
+                        <div>
+                            <div class="text-xs uppercase font-semibold opacity-75" id="predModelLabel"></div>
+                            <div class="text-lg font-bold" id="predLabel"></div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs opacity-75">Độ tin cậy</div>
+                            <div class="text-lg font-bold" id="predConfidence"></div>
+                            <div class="text-xs opacity-75" id="predProb"></div>
+                        </div>
+                    </div>
+
+                    <!-- Top Drivers -->
+                    <div>
+                        <div class="text-xs font-semibold uppercase text-slate-500 mb-1.5">Thuộc tính tác động mạnh nhất</div>
+                        <ul id="topDriversList" class="text-xs space-y-1 text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-100"></ul>
+                    </div>
+
+                    <!-- 4-step Structured Explanation -->
+                    <div class="space-y-2.5 text-xs leading-relaxed">
+                        <div class="p-2.5 bg-blue-50/70 rounded-lg border border-blue-100">
+                            <span class="font-bold text-blue-800">1. Ý tưởng:</span>
+                            <span id="expIdea" class="text-slate-700"></span>
+                        </div>
+                        <div class="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
+                            <span class="font-bold text-slate-800">2. Dẫn dắt:</span>
+                            <span id="expGuidance" class="text-slate-700"></span>
+                        </div>
+                        <div class="p-2.5 bg-amber-50/70 rounded-lg border border-amber-100">
+                            <span class="font-bold text-amber-800">3. Phản biện:</span>
+                            <span id="expCritique" class="text-slate-700"></span>
+                        </div>
+                        <div class="p-2.5 bg-emerald-50/70 rounded-lg border border-emerald-100">
+                            <span class="font-bold text-emerald-800">4. Minh chứng:</span>
+                            <span id="expEvidence" class="text-slate-700"></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Feature Importance Chart -->
+            <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <h2 class="text-base font-semibold text-slate-800 mb-2">Mức độ ảnh hưởng của thuộc tính (Top 10)</h2>
+                <p class="text-xs text-slate-500 mb-3">Thay đổi theo từng mô hình khi chọn ở Dropdown</p>
+                <div class="h-64">
+                    <canvas id="featureChart"></canvas>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        const METRICS = {{ metrics_json|safe }};
+        const SAMPLES = {{ samples_json|safe }};
+        const DATASET_SUMMARY = {{ dataset_summary_json|safe }};
+        let lastFeatures = null;
+        let featureChartInstance = null;
+
+        function getCsrfToken() {
+            const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+
+        function initPage() {
+            if (DATASET_SUMMARY && DATASET_SUMMARY.prefix_rows) {
+                document.getElementById('datasetSummaryText').textContent =
+                    `Train (prefix): ${DATASET_SUMMARY.prefix_rows.toLocaleString()} dòng (${DATASET_SUMMARY.prefix_fraud} gian lận) | ` +
+                    `Streaming & Test (suffix): ${DATASET_SUMMARY.suffix_rows.toLocaleString()} dòng (${DATASET_SUMMARY.suffix_fraud} gian lận)`;
+            }
+            renderSampleTable();
+            updateModelMetrics();
+        }
+
+        function renderSampleTable() {
+            const tbody = document.getElementById('sampleTableBody');
+            tbody.innerHTML = '';
+            SAMPLES.forEach((row, idx) => {
+                const isFraud = Number(row.Class) === 1;
+                const badge = isFraud
+                    ? '<span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-rose-100 text-rose-700">Gian lận (1)</span>'
+                    : '<span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Hợp lệ (0)</span>';
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50';
+                tr.innerHTML = `
+                    <td class="p-2.5 font-medium text-slate-500">${row.sample_id || idx + 1}</td>
+                    <td class="p-2.5">${Number(row.Time).toFixed(0)}</td>
+                    <td class="p-2.5 font-medium">$${Number(row.Amount).toFixed(2)}</td>
+                    <td class="p-2.5">${Number(row.V14).toFixed(2)}</td>
+                    <td class="p-2.5">${Number(row.V17).toFixed(2)}</td>
+                    <td class="p-2.5">${badge}</td>
+                    <td class="p-2.5 text-center">
+                        <button onclick="predictSample(${idx})" class="px-3 py-1 bg-slate-800 hover:bg-blue-600 text-white text-xs rounded-md transition">
+                            Dự báo
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function updateModelMetrics() {
+            const modelName = document.getElementById('modelSelect').value;
+            const m = METRICS[modelName];
+            if (!m) return;
+
+            document.getElementById('trainModeBadge').textContent = m.train_mode || modelName;
+            document.getElementById('metricPrecision').textContent = (m.precision * 100).toFixed(2) + '%';
+            document.getElementById('metricRecall').textContent = (m.recall * 100).toFixed(2) + '%';
+            document.getElementById('metricF1').textContent = (m.f1 * 100).toFixed(2) + '%';
+            document.getElementById('metricRoc').textContent = m.roc_auc.toFixed(4);
+            document.getElementById('metricPr').textContent = m.pr_auc.toFixed(4);
+
+            if (m.confusion_matrix && m.confusion_matrix.length === 2) {
+                const [[tn, fp], [fn, tp]] = m.confusion_matrix;
+                document.getElementById('confusionMatrixRow').innerHTML = `
+                    <span><strong>Confusion Matrix (tập suffix):</strong></span>
+                    <span>TN = ${tn.toLocaleString()}</span>
+                    <span class="text-amber-600">FP = ${fp.toLocaleString()}</span>
+                    <span class="text-rose-600">FN = ${fn.toLocaleString()}</span>
+                    <span class="text-emerald-600">TP = ${tp.toLocaleString()}</span>
+                `;
+            }
+
+            renderFeatureChart(m.feature_importance || {});
+        }
+
+        function renderFeatureChart(importanceMap) {
+            const entries = Object.entries(importanceMap)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+            const labels = entries.map(e => e[0]);
+            const values = entries.map(e => Number((e[1] * 100).toFixed(2)));
+
+            const ctx = document.getElementById('featureChart').getContext('2d');
+            if (featureChartInstance) featureChartInstance.destroy();
+            featureChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Tỷ trọng ảnh hưởng (%)',
+                        data: values,
+                        backgroundColor: '#2563eb',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { beginAtZero: true } }
+                }
+            });
+        }
+
+        function onModelChange() {
+            updateModelMetrics();
+            if (lastFeatures) {
+                callPredictApi(lastFeatures);
+            }
+        }
+
+        function predictSample(idx) {
+            const row = { ...SAMPLES[idx] };
+            delete row.Class;
+            delete row.sample_id;
+            lastFeatures = row;
+            callPredictApi(row);
+        }
+
+        function runManualInference() {
+            const features = {
+                Time: parseFloat(document.getElementById('manualTime').value || 0),
+                Amount: parseFloat(document.getElementById('manualAmount').value || 0),
+                V14: parseFloat(document.getElementById('manualV14').value || 0),
+                V17: parseFloat(document.getElementById('manualV17').value || 0),
+                V12: parseFloat(document.getElementById('manualV12').value || 0),
+                V10: parseFloat(document.getElementById('manualV10').value || 0),
+            };
+            lastFeatures = features;
+            callPredictApi(features);
+        }
+
+        async function callPredictApi(features) {
+            const modelName = document.getElementById('modelSelect').value;
+            const res = await fetch('/api/predict/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({ model: modelName, features })
+            });
+            const data = await res.json();
+            if (data.status !== 'success') {
+                alert('Lỗi dự báo: ' + (data.message || 'Unknown error'));
+                return;
+            }
+            const r = data.result;
+            document.getElementById('predictionPlaceholder').classList.add('hidden');
+            document.getElementById('predictionResultBox').classList.remove('hidden');
+
+            const banner = document.getElementById('predictionBanner');
+            banner.className = r.prediction === 1
+                ? 'p-3.5 rounded-lg border flex justify-between items-center bg-rose-50 border-rose-200 text-rose-800'
+                : 'p-3.5 rounded-lg border flex justify-between items-center bg-emerald-50 border-emerald-200 text-emerald-800';
+
+            document.getElementById('predModelLabel').textContent = `Mô hình: ${r.model}`;
+            document.getElementById('predLabel').textContent = r.label;
+            document.getElementById('predConfidence').textContent = (r.confidence * 100).toFixed(2) + '%';
+            document.getElementById('predProb').textContent = `P(Fraud) = ${(r.probability * 100).toFixed(2)}%`;
+
+            const driversList = document.getElementById('topDriversList');
+            driversList.innerHTML = (r.top_drivers || []).map(d =>
+                `<li class="flex justify-between"><span><strong>${d.feature}</strong> = ${d.raw_value}</span><span>z=${d.z_score >= 0 ? '+' : ''}${d.z_score} | imp=${(d.importance * 100).toFixed(1)}%</span></li>`
+            ).join('');
+
+            document.getElementById('expIdea').textContent = r.explanation.idea;
+            document.getElementById('expGuidance').textContent = r.explanation.guidance;
+            document.getElementById('expCritique').textContent = r.explanation.critique;
+            document.getElementById('expEvidence').textContent = r.explanation.evidence;
+        }
+
+        document.addEventListener('DOMContentLoaded', initPage);
+    </script>
+</body>
+</html>
